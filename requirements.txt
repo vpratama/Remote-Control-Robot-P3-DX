@@ -1,0 +1,5 @@
+pygame>=2.6.1
+pika>=1.4.2
+python-dotenv>=1.2.2
+PyQt6>=6.6.0
+PyQt6-WebEngine>=6.6.0
