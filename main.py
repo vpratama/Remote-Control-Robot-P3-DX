@@ -4,11 +4,13 @@ import os
 import threading
 import time
 import webbrowser
-from tkinter import BOTH, LEFT, RIGHT, StringVar, Tk, Canvas, Frame, Label, Text, ttk
+from tkinter import BOTH, LEFT, RIGHT, StringVar, Tk, Canvas, Frame, Label, Text, BooleanVar, Checkbutton, ttk
 from PIL import Image, ImageTk, ImageDraw
 
 import pika
+import json
 from dotenv import load_dotenv
+from datetime import datetime
 from tkintermapview import TkinterMapView
 
 try:
@@ -61,6 +63,7 @@ def get_rabbitmq_config():
         'vhost': os.getenv('RABBITMQ_VHOST', '/'),
         'control_queue': os.getenv('RABBITMQ_QUEUE', 'control'),
         'sensor_queue': os.getenv('RABBITMQ_QUEUE_SENSOR', 'sensor'),
+        'terminal_queue': os.getenv('RABBITMQ_QUEUE_TERMINAL', 'terminal'),
     }
 
 
@@ -369,6 +372,7 @@ class RemoteControlWindow(Tk):
         self.state('zoomed') # Memaksimalkan jendela
         self.input = ControllerInput()
         self.subscriber = None
+        self.terminal_subscriber = None
         self.control_connection = None
         self.control_channel = None
         self.sensors = [0, 0, 0, 0, 0, 0, 0, 0]
@@ -376,6 +380,7 @@ class RemoteControlWindow(Tk):
         self.bind_keys()
         self.after(100, self.update_loop) # Memulai loop pembaruan
         self.connect_rabbitmq()
+        self.connect_terminal_rabbitmq()
         self.input.init_pygame()
 
     def create_widgets(self):
@@ -455,8 +460,20 @@ class RemoteControlWindow(Tk):
 
         log_group = ttk.LabelFrame(right, text='Log')
         log_group.grid(row=1, column=0, sticky='nsew', padx=(6, 0), pady=(3, 0))
-        self.log_text = Text(log_group, wrap='word', font=('Segoe UI', 9))
-        self.log_text.pack(fill=BOTH, expand=True, padx=8, pady=8)
+        # Scrollable Text with vertical scrollbar
+        log_frame = Frame(log_group)
+        log_frame.pack(fill=BOTH, expand=True, padx=8, pady=(8, 4))
+        self.log_text = Text(log_frame, wrap='word', font=('Segoe UI', 9))
+        vsb = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=RIGHT, fill='y')
+        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
+        # Auto-scroll toggle
+        control_frame = Frame(log_group)
+        control_frame.pack(fill='x', padx=8, pady=(0, 8))
+        self.follow_var = BooleanVar(value=True)
+        self.follow_check = ttk.Checkbutton(control_frame, text='Auto-scroll', variable=self.follow_var)
+        self.follow_check.pack(side=LEFT)
 
 
     def bind_keys(self):
@@ -534,6 +551,120 @@ class RemoteControlWindow(Tk):
         )
         self.subscriber.start()
 
+    def connect_terminal_rabbitmq(self):
+        """Start a background consumer that listens to the terminal queue and logs messages into the GUI."""
+        if self.terminal_subscriber and self.terminal_subscriber.is_alive():
+            return
+        cfg = get_rabbitmq_config()
+        term_queue = cfg.get('terminal_queue', 'terminal')
+
+        def _terminal_worker():
+            try:
+                creds = pika.PlainCredentials(cfg['user'], cfg['password'])
+                conn = pika.BlockingConnection(
+                    pika.ConnectionParameters(host=cfg['host'], port=cfg['port'], virtual_host=cfg['vhost'], credentials=creds)
+                )
+                ch = conn.channel()
+                ch.queue_declare(queue=term_queue, durable=True, auto_delete=False)
+
+                def _cb(ch, method, properties, body):
+                    try:
+                        if isinstance(body, bytes):
+                            msg = body.decode('utf-8', errors='ignore').strip()
+                        else:
+                            msg = str(body).strip()
+                        # Try to parse JSON and pretty-format
+                        formatted = msg
+                        try:
+                            data = json.loads(msg)
+                            if isinstance(data, dict):
+                                ts = data.get('time')
+                                if ts is not None:
+                                    try:
+                                        ts = float(ts)
+                                        ts_str = datetime.fromtimestamp(ts).strftime('%d-%m-%Y %H:%M:%S')
+                                    except Exception:
+                                        ts_str = str(ts)
+                                else:
+                                    ts_str = ''
+                                direction = str(data.get('dir', '')).upper()
+                                hexs = data.get('hex', '')
+                                text = data.get('text', '')
+                                # Preserve real newlines in text while escaping other non-printable bytes
+                                def _make_display_text(t):
+                                    try:
+                                        if isinstance(t, bytes):
+                                            t = t.decode('utf-8', errors='replace')
+                                    except Exception:
+                                        t = str(t)
+                                    out_chars = []
+                                    for ch in t:
+                                        code = ord(ch)
+                                        if ch in ('\n', '\r', '\t'):
+                                            out_chars.append(ch)
+                                        elif 32 <= code < 127 or code >= 160:
+                                            out_chars.append(ch)
+                                        else:
+                                            out_chars.append('\\x{:02x}'.format(code))
+                                    return ''.join(out_chars)
+
+                                try:
+                                    text_display = _make_display_text(text)
+                                except Exception:
+                                    text_display = str(text)
+
+                                parts = []
+                                if ts_str:
+                                    parts.append(ts_str)
+                                if direction:
+                                    parts.append(direction)
+                                if hexs:
+                                    parts.append('HEX: {}'.format(hexs))
+                                if text_display:
+                                    parts.append('TEXT: {}'.format(text_display))
+                                # Put each section on its own line
+                                formatted = '\n'.join(parts)
+                                # If TEXT is present, add an extra blank line after it
+                                if text_display:
+                                    formatted = formatted + '\n\n'
+                        except Exception:
+                            # not JSON or parse failed; keep raw msg
+                            formatted = msg
+
+                        # schedule GUI update on main thread
+                        try:
+                            self.after(0, lambda m=formatted: self.log('TERMINAL: ' + m))
+                        except Exception:
+                            try:
+                                self.log('TERMINAL: ' + formatted)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                    except Exception:
+                        try:
+                            ch.basic_ack()
+                        except Exception:
+                            pass
+
+                try:
+                    ch.basic_consume(queue=term_queue, on_message_callback=_cb, auto_ack=False)
+                except TypeError:
+                    ch.basic_consume(_cb, queue=term_queue, no_ack=False)
+
+                ch.start_consuming()
+            except Exception as e:
+                try:
+                    self.after(0, lambda: self.log('Terminal consumer error: {}'.format(e)))
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_terminal_worker, daemon=True)
+        t.start()
+        self.terminal_subscriber = t
+
     def on_sensor_data(self, values):
         """Menangani data sensor yang diterima dari RabbitMQ."""
         self.sensors = values
@@ -546,10 +677,21 @@ class RemoteControlWindow(Tk):
         self.status_var.set(message)
         self.log(message)
 
-    def log(self, message):
-        """Menambahkan pesan ke log teks di UI."""
-        self.log_text.insert('end', message + '\n')
-        self.log_text.see('end')
+    def log(self, message, session=False):
+        """Menambahkan pesan ke log teks di UI.
+
+        If session=True, insert two newlines after the message (separates terminal sessions).
+        """
+        try:
+            if session:
+                self.log_text.insert('end', message + '\n\n')
+            else:
+                self.log_text.insert('end', message + '\n')
+            if getattr(self, 'follow_var', None) and self.follow_var.get():
+                self.log_text.see('end')
+        except Exception:
+            # fallback: ignore logging errors
+            pass
 
     def publish_control(self, left, right):
         """Menerbitkan perintah kontrol ke RabbitMQ."""
