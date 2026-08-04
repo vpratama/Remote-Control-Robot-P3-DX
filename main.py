@@ -624,9 +624,6 @@ class RemoteControlWindow(Tk):
                                     parts.append('TEXT: {}'.format(text_display))
                                 # Put each section on its own line
                                 formatted = '\n'.join(parts)
-                                # If TEXT is present, add an extra blank line after it
-                                if text_display:
-                                    formatted = formatted + '\n\n'
                         except Exception:
                             # not JSON or parse failed; keep raw msg
                             formatted = msg
