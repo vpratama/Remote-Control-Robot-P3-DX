@@ -276,7 +276,7 @@ class ControllerInput:
             forward = keyboard_forward or controller_forward
             backward = keyboard_backward or controller_backward
             turn_left = keyboard_left or controller_left
-            turn_right = controller_right
+            turn_right = keyboard_right or controller_right
 
         if forward and not backward:
             if turn_left and not turn_right:
