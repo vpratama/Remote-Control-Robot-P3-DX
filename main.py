@@ -408,7 +408,11 @@ class ControllerInput:
 class RadarCanvas(Canvas):
     """Widget Canvas untuk menampilkan data sensor radar."""
     def __init__(self, master):
-        super().__init__(master, width=320, height=320, bg='#07110b', highlightthickness=0)
+        try:
+            self.app_bg = master.winfo_toplevel().cget('bg')
+        except Exception:
+            self.app_bg = '#f0f0f0'
+        super().__init__(master, width=640, height=640, bg=self.app_bg, highlightthickness=0)
         self.sensors = [0, 0, 0, 0, 0, 0, 0, 0]
         self.after_id = None
         self.draw()
@@ -421,15 +425,15 @@ class RadarCanvas(Canvas):
     def draw(self):
         """Menggambar tampilan radar berdasarkan data sensor."""
         self.delete('all')
-        cx = 160
-        cy = 160
-        radius = 122
+        cx = 320
+        cy = 320
+        radius = 260
         angles = [0, 45, 90, 135, 180, 225, 270, 315]
-        ring_values = [1500, 3000, 4500, 6000]
+        ring_values = [1000, 2000, 3000]
 
         # Background + grid rings to make the widget read like a radar chart.
-        self.create_rectangle(0, 0, 320, 320, fill='#07110b', outline='')
-        self.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline='#214c2b', width=2)
+        self.create_rectangle(0, 0, 640, 640, fill=self.app_bg, outline='')
+        self.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline='#444444', width=2)
         for ring_value in ring_values[:-1]:
             ring_radius = radius * (ring_value / ring_values[-1])
             self.create_oval(
@@ -437,7 +441,7 @@ class RadarCanvas(Canvas):
                 cy - ring_radius,
                 cx + ring_radius,
                 cy + ring_radius,
-                outline='#123122',
+                outline='#c8c8c8',
                 width=1,
             )
 
@@ -446,9 +450,9 @@ class RadarCanvas(Canvas):
             rad = math.radians(angle)
             x = cx + radius * math.sin(rad)
             y = cy - radius * math.cos(rad)
-            self.create_line(cx, cy, x, y, fill='#1a3a24', width=1, dash=(2, 4))
+            self.create_line(cx, cy, x, y, fill='#b0b0b0', width=1, dash=(2, 4))
 
-            label_radius = radius + 14
+            label_radius = radius + 18
             lx = cx + label_radius * math.sin(rad)
             ly = cy - label_radius * math.cos(rad)
             label = f'{angle}°'
@@ -458,7 +462,7 @@ class RadarCanvas(Canvas):
                 ly += 4
             elif angle in {90, 270}:
                 lx += 10 if angle == 90 else -10
-            self.create_text(lx, ly, text=label, fill='#8fd9a1', font=('Consolas', 8, 'bold'))
+            self.create_text(lx, ly, text=label, fill='black', font=('Consolas', 10, 'bold'))
 
         # Ring labels on the top axis.
         for ring_value in ring_values[:-1]:
@@ -467,14 +471,14 @@ class RadarCanvas(Canvas):
                 cx + 10,
                 cy - ring_radius,
                 text=str(ring_value),
-                fill='#5e8d6a',
-                font=('Consolas', 7),
+                fill='black',
+                font=('Consolas', 9),
                 anchor='w',
             )
 
         # Center marker.
-        self.create_oval(cx - 14, cy - 14, cx + 14, cy + 14, outline='#00ff88', width=2)
-        self.create_text(cx, cy + 2, text='BOT', fill='#00ff88', font=('Consolas', 10, 'bold'))
+        self.create_oval(cx - 18, cy - 18, cx + 18, cy + 18, outline='#00a86b', width=2)
+        self.create_text(cx, cy + 2, text='BOT', fill='black', font=('Consolas', 12, 'bold'))
 
         # Plot sensor values as a filled radar polygon.
         sensor_points = []
