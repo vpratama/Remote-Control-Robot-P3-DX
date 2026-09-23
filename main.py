@@ -14,6 +14,11 @@ from datetime import datetime
 from tkintermapview import TkinterMapView
 
 try:
+    import paho.mqtt.client as mqtt
+except ImportError:  # pragma: no cover
+    mqtt = None
+
+try:
     import pygame
 except ImportError:  # pragma: no cover
     pygame = None
@@ -67,6 +72,51 @@ def get_rabbitmq_config():
     }
 
 
+def get_sensor_subscription_config():
+    """Mengambil konfigurasi subscription sensor dan backend yang dipilih."""
+    rabbitmq = get_rabbitmq_config()
+    transport = os.getenv('SENSOR_SUBSCRIBE_TRANSPORT', 'mqtt').strip().lower()
+    if transport not in {'mqtt', 'amqp'}:
+        transport = 'mqtt'
+
+    return {
+        'transport': transport,
+        'mqtt_host': os.getenv('SENSOR_MQTT_HOST', rabbitmq['host']),
+        'mqtt_port': int(os.getenv('SENSOR_MQTT_PORT', '1883')),
+        'mqtt_user': os.getenv('SENSOR_MQTT_USER', rabbitmq['user']),
+        'mqtt_password': os.getenv('SENSOR_MQTT_PASSWORD', rabbitmq['password']),
+        'mqtt_topic': os.getenv('SENSOR_MQTT_TOPIC', rabbitmq['sensor_queue']),
+        'mqtt_client_id': os.getenv('SENSOR_MQTT_CLIENT_ID', 'remote-control-sensor-subscriber'),
+        'amqp_host': rabbitmq['host'],
+        'amqp_port': rabbitmq['port'],
+        'amqp_user': rabbitmq['user'],
+        'amqp_password': rabbitmq['password'],
+        'amqp_vhost': rabbitmq['vhost'],
+        'amqp_queue': rabbitmq['sensor_queue'],
+    }
+
+
+def parse_sensor_values(payload):
+    """Parse payload sensor CSV menjadi 8 nilai integer."""
+    if isinstance(payload, bytes):
+        text = payload.decode('utf-8', errors='ignore').strip()
+    else:
+        text = str(payload).strip()
+
+    if not text:
+        return None
+
+    try:
+        values = [int(float(value)) for value in text.split(',') if value.strip()]
+    except Exception:
+        return None
+
+    if len(values) != 8:
+        return None
+
+    return values
+
+
 class RabbitMQSubscriber(threading.Thread):
     """Kelas untuk berlangganan pesan dari RabbitMQ dalam thread terpisah."""
     def __init__(self, host, port, user, password, vhost, queue, on_data, on_status):
@@ -107,11 +157,66 @@ class RabbitMQSubscriber(threading.Thread):
 
     def _callback(self, ch, method, properties, body):
         """Callback saat menerima pesan dari RabbitMQ."""
+        values = parse_sensor_values(body)
+        if values is not None:
+            self.on_data(values)
+
+
+class MqttSensorSubscriber(threading.Thread):
+    """Kelas untuk berlangganan data sensor dari MQTT dalam thread terpisah."""
+    def __init__(self, host, port, user, password, topic, client_id, on_data, on_status):
+        super().__init__(daemon=True)
+        self.host = host
+        self.port = port
+        self.user = user
+        self.password = password
+        self.topic = topic
+        self.client_id = client_id
+        self.on_data = on_data
+        self.on_status = on_status
+        self.client = None
+
+    def run(self):
+        """Menghubungkan ke broker MQTT lalu berlangganan topik sensor."""
+        if mqtt is None:
+            self.on_status('Error: paho-mqtt is not installed')
+            return
+
+        self.on_status('Connecting to MQTT sensor...')
         try:
-            text = body.decode('utf-8', errors='ignore').strip()
-            values = [int(float(v)) for v in text.split(',') if v.strip()]
-            if len(values) == 8:
-                self.on_data(values)
+            client = mqtt.Client(client_id=self.client_id)
+            if self.user:
+                client.username_pw_set(self.user, self.password)
+            client.on_connect = self._on_connect
+            client.on_message = self._on_message
+            client.on_disconnect = self._on_disconnect
+            self.client = client
+            client.connect(self.host, self.port, keepalive=60)
+            client.loop_forever()
+        except Exception as exc:
+            self.on_status(f'Error: {exc}')
+
+    def _on_connect(self, client, userdata, flags, rc, properties=None):
+        if rc == 0:
+            self.on_status(f'Connected to MQTT sensor topic {self.topic}')
+            client.subscribe(self.topic)
+            return
+        self.on_status(f'MQTT connect failed rc={rc}')
+
+    def _on_message(self, client, userdata, msg):
+        values = parse_sensor_values(msg.payload)
+        if values is not None:
+            self.on_data(values)
+
+    def _on_disconnect(self, client, userdata, rc, properties=None):
+        if rc != 0:
+            self.on_status(f'MQTT sensor disconnected rc={rc}')
+
+    def stop(self):
+        """Menghentikan langganan MQTT sensor."""
+        try:
+            if self.client:
+                self.client.disconnect()
         except Exception:
             pass
 
@@ -333,24 +438,23 @@ class RadarCanvas(Canvas):
             x = cx + radius * math.sin(rad)
             y = cy - radius * math.cos(rad)
             self.create_line(cx, cy, x, y, fill='#162d1e', width=1, dash=(2, 4))
+        # Menggambar indikator BOT sebelum sensor agar titik sensor dekat pusat tetap terlihat
+        self.create_oval(cx - 14, cy - 14, cx + 14, cy + 14, outline='#00ff88', width=2)
+        self.create_text(cx, cy + 3, text='BOT', fill='#00ff88', font=('Consolas', 10, 'bold'))
+
         # Menggambar pembacaan sensor
         for idx, dist in enumerate(self.sensors):
             ang = math.radians(angles[idx])
-            r = min(dist, 6000) / 6000 * radius
+            if dist <= 0:
+                r = 0
+            else:
+                r = max(8, min(dist, 6000) / 6000 * radius)
             x = cx + r * math.sin(ang)
             y = cy - r * math.cos(ang)
             color = self._color(dist)
             self.create_line(cx, cy, x, y, fill=color, width=1)
             self.create_oval(x - 5, y - 5, x + 5, y + 5, fill=color, outline='white')
-        # Menggambar indikator BOT
-        self.create_oval(cx - 14, cy - 14, cx + 14, cy + 14, outline='#00ff88', width=2)
-        self.create_text(cx, cy + 3, text='BOT', fill='#00ff88', font=('Consolas', 10, 'bold'))
-        # Menggambar sapuan radar
-        self.angle = (self.angle + 3) % 360
-        sweep = math.radians(self.angle)
-        x = cx + radius * math.sin(sweep)
-        y = cy - radius * math.cos(sweep)
-        self.create_line(cx, cy, x, y, fill='#00ff88', width=2)
+
         self.after_id = self.after(40, self.draw)
 
     def _color(self, dist):
@@ -371,7 +475,7 @@ class RemoteControlWindow(Tk):
         self.title('Remote Control - Robot P3-DX')
         self.state('zoomed') # Memaksimalkan jendela
         self.input = ControllerInput()
-        self.subscriber = None
+        self.sensor_subscriber = None
         self.terminal_subscriber = None
         self.control_connection = None
         self.control_channel = None
@@ -379,7 +483,7 @@ class RemoteControlWindow(Tk):
         self.create_widgets()
         self.bind_keys()
         self.after(100, self.update_loop) # Memulai loop pembaruan
-        self.connect_rabbitmq()
+        self.connect_sensor_subscription()
         self.connect_terminal_rabbitmq()
         self.input.init_pygame()
 
@@ -534,22 +638,34 @@ class RemoteControlWindow(Tk):
         self.after(100, self.update_loop)
 
 
-    def connect_rabbitmq(self):
-        """Menghubungkan ke RabbitMQ untuk menerima data sensor."""
-        if self.subscriber and self.subscriber.is_alive():
+    def connect_sensor_subscription(self):
+        """Menghubungkan ke backend sensor yang dipilih lewat environment."""
+        if self.sensor_subscriber and self.sensor_subscriber.is_alive():
             return
-        config = get_rabbitmq_config()
-        self.subscriber = RabbitMQSubscriber(
-            config['host'],
-            config['port'],
-            config['user'],
-            config['password'],
-            config['vhost'],
-            config['sensor_queue'],
-            self.on_sensor_data,
-            self.on_status,
-        )
-        self.subscriber.start()
+        config = get_sensor_subscription_config()
+        if config['transport'] == 'amqp':
+            self.sensor_subscriber = RabbitMQSubscriber(
+                config['amqp_host'],
+                config['amqp_port'],
+                config['amqp_user'],
+                config['amqp_password'],
+                config['amqp_vhost'],
+                config['amqp_queue'],
+                self.on_sensor_data,
+                self.on_status,
+            )
+        else:
+            self.sensor_subscriber = MqttSensorSubscriber(
+                config['mqtt_host'],
+                config['mqtt_port'],
+                config['mqtt_user'],
+                config['mqtt_password'],
+                config['mqtt_topic'],
+                config['mqtt_client_id'],
+                self.on_sensor_data,
+                self.on_status,
+            )
+        self.sensor_subscriber.start()
 
     def connect_terminal_rabbitmq(self):
         """Start a background consumer that listens to the terminal queue and logs messages into the GUI."""
@@ -720,8 +836,8 @@ class RemoteControlWindow(Tk):
 
     def destroy(self):
         """Membersihkan sumber daya saat aplikasi ditutup."""
-        if self.subscriber:
-            self.subscriber.stop()
+        if self.sensor_subscriber:
+            self.sensor_subscriber.stop()
         if self.control_connection and self.control_connection.is_open:
             self.control_connection.close()
         super().destroy()

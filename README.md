@@ -9,7 +9,7 @@ Aplikasi ini menyediakan antarmuka remote control untuk robot P3-DX, memungkinka
 *   **Pemetaan Kecepatan**: Mengatur kecepatan robot melalui tombol keyboard atau controller dengan sinkronisasi UI otomatis.
 *   **Tampilan Radar**: Visualisasi real-time dari 8 sensor jarak robot.
 *   **Peta OpenStreetMap**: Menampilkan posisi robot saat ini menggunakan `TkinterMapView`.
-*   **Komunikasi RabbitMQ**: Protokol komunikasi asinkron untuk pengiriman instruksi kontrol dan penerimaan data sensor.
+*   **Komunikasi RabbitMQ + MQTT**: Instruksi kontrol tetap lewat RabbitMQ, sementara data sensor bisa disubscribe lewat MQTT atau AMQP sesuai konfigurasi.
 
 ## Pemetaan Kecepatan
 
@@ -50,7 +50,7 @@ Aplikasi ini mendukung pemetaan kecepatan yang seragam untuk keyboard dan berbag
     pip install -r requirements.txt
     ```
 
-3.  **Konfigurasi RabbitMQ**: Siapkan file `.env` dengan konfigurasi berikut:
+3.  **Konfigurasi RabbitMQ / MQTT**: Siapkan file `.env` dengan konfigurasi berikut:
 
     ```env
     RABBITMQ_HOST=localhost
@@ -60,8 +60,16 @@ Aplikasi ini mendukung pemetaan kecepatan yang seragam untuk keyboard dan berbag
     RABBITMQ_VHOST=/
     RABBITMQ_QUEUE=control
     RABBITMQ_QUEUE_SENSOR=sensor
+    SENSOR_SUBSCRIBE_TRANSPORT=mqtt
+    SENSOR_MQTT_HOST=localhost
+    SENSOR_MQTT_PORT=1883
+    SENSOR_MQTT_USER=
+    SENSOR_MQTT_PASSWORD=
+    SENSOR_MQTT_TOPIC=sensor
     LOCATION=-6.95360761453292,107.6965409137443
     ```
+
+`SENSOR_SUBSCRIBE_TRANSPORT` menentukan backend yang dipakai untuk sensor. Pilihan yang valid adalah `mqtt` dan `amqp`. Jika `mqtt`, aplikasi akan subscribe langsung ke topic MQTT sensor. Jika `amqp`, aplikasi akan tetap memakai queue RabbitMQ sensor lama.
 
 ## Penggunaan
 
@@ -89,5 +97,5 @@ python main.py
 
 *   `main.py`: Kode sumber utama aplikasi.
 *   `.env`: Konfigurasi RabbitMQ dan lokasi awal.
-*   `requirements.txt`: Dependensi library (pika, pygame, tkintermapview, dsb).
+*   `requirements.txt`: Dependensi library (pika, paho-mqtt, pygame, tkintermapview, dsb).
 *   `setup.bat` / `run.bat`: Script pembantu untuk inisialisasi dan menjalankan aplikasi di Windows.
