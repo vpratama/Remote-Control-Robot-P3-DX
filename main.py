@@ -410,7 +410,6 @@ class RadarCanvas(Canvas):
     def __init__(self, master):
         super().__init__(master, width=320, height=320, bg='#07110b', highlightthickness=0)
         self.sensors = [0, 0, 0, 0, 0, 0, 0, 0]
-        self.angle = 0
         self.after_id = None
         self.draw()
 
@@ -424,35 +423,83 @@ class RadarCanvas(Canvas):
         self.delete('all')
         cx = 160
         cy = 160
-        radius = 120
-        # Menggambar lingkaran radar dan garis bantu
-        self.create_oval(cx - 140, cy - 140, cx + 140, cy + 140, outline='#1e4d2e', width=1)
-        self.create_oval(cx - 105, cy - 105, cx + 105, cy + 105, outline='#123122', width=1)
-        self.create_oval(cx - 70, cy - 70, cx + 70, cy + 70, outline='#123122', width=1)
-        self.create_oval(cx - 35, cy - 35, cx + 35, cy + 35, outline='#123122', width=1)
-        self.create_line(cx, 0, cx, 320, fill='#162d1e', width=1)
-        self.create_line(0, cy, 320, cy, fill='#162d1e', width=1)
+        radius = 122
         angles = [0, 45, 90, 135, 180, 225, 270, 315]
+        ring_values = [1500, 3000, 4500, 6000]
+
+        # Background + grid rings to make the widget read like a radar chart.
+        self.create_rectangle(0, 0, 320, 320, fill='#07110b', outline='')
+        self.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline='#214c2b', width=2)
+        for ring_value in ring_values[:-1]:
+            ring_radius = radius * (ring_value / ring_values[-1])
+            self.create_oval(
+                cx - ring_radius,
+                cy - ring_radius,
+                cx + ring_radius,
+                cy + ring_radius,
+                outline='#123122',
+                width=1,
+            )
+
+        # Angle spokes and labels for every 45 degrees.
         for angle in angles:
             rad = math.radians(angle)
             x = cx + radius * math.sin(rad)
             y = cy - radius * math.cos(rad)
-            self.create_line(cx, cy, x, y, fill='#162d1e', width=1, dash=(2, 4))
-        # Menggambar indikator BOT sebelum sensor agar titik sensor dekat pusat tetap terlihat
-        self.create_oval(cx - 14, cy - 14, cx + 14, cy + 14, outline='#00ff88', width=2)
-        self.create_text(cx, cy + 3, text='BOT', fill='#00ff88', font=('Consolas', 10, 'bold'))
+            self.create_line(cx, cy, x, y, fill='#1a3a24', width=1, dash=(2, 4))
 
-        # Menggambar pembacaan sensor
+            label_radius = radius + 14
+            lx = cx + label_radius * math.sin(rad)
+            ly = cy - label_radius * math.cos(rad)
+            label = f'{angle}°'
+            if angle == 0:
+                ly -= 4
+            elif angle == 180:
+                ly += 4
+            elif angle in {90, 270}:
+                lx += 10 if angle == 90 else -10
+            self.create_text(lx, ly, text=label, fill='#8fd9a1', font=('Consolas', 8, 'bold'))
+
+        # Ring labels on the top axis.
+        for ring_value in ring_values[:-1]:
+            ring_radius = radius * (ring_value / ring_values[-1])
+            self.create_text(
+                cx + 10,
+                cy - ring_radius,
+                text=str(ring_value),
+                fill='#5e8d6a',
+                font=('Consolas', 7),
+                anchor='w',
+            )
+
+        # Center marker.
+        self.create_oval(cx - 14, cy - 14, cx + 14, cy + 14, outline='#00ff88', width=2)
+        self.create_text(cx, cy + 2, text='BOT', fill='#00ff88', font=('Consolas', 10, 'bold'))
+
+        # Plot sensor values as a filled radar polygon.
+        sensor_points = []
         for idx, dist in enumerate(self.sensors):
             ang = math.radians(angles[idx])
             if dist <= 0:
                 r = 0
             else:
-                r = max(8, min(dist, 6000) / 6000 * radius)
+                r = max(8, min(dist, ring_values[-1]) / ring_values[-1] * radius)
             x = cx + r * math.sin(ang)
             y = cy - r * math.cos(ang)
-            color = self._color(dist)
-            self.create_line(cx, cy, x, y, fill=color, width=1)
+            sensor_points.append((x, y))
+
+        if len(sensor_points) >= 3:
+            flat_points = [coord for point in sensor_points for coord in point]
+            self.create_polygon(
+                *flat_points,
+                fill='#1f8f84',
+                outline='#2dd4bf',
+                width=2,
+                smooth=True,
+            )
+
+        for idx, (x, y) in enumerate(sensor_points):
+            color = self._color(self.sensors[idx])
             self.create_oval(x - 5, y - 5, x + 5, y + 5, fill=color, outline='white')
 
         self.after_id = self.after(40, self.draw)
